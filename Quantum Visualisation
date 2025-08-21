@@ -1,0 +1,186 @@
+# ----------------------------
+# Geodrift-Feld Quantum Simulation + 3D Animation
+# ----------------------------
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from qiskit import Aer, QuantumCircuit, execute
+from qiskit.utils import QuantumInstance
+from qiskit.algorithms import VQE
+from qiskit.circuit.library import RealAmplitudes
+from qiskit.opflow import PauliSumOp
+from qiskit.algorithms.optimizers import SPSA
+
+# ----------------------------
+# 1. Systemparameter
+# ----------------------------
+num_qubits_per_particle = 2
+num_particles = 3
+total_qubits = num_qubits_per_particle * num_particles
+
+kinetic_strength = 0.5
+interaction_strength = -1.0
+external_field_strength = 0.1
+
+time_step = 0.1
+trotter_steps = 5
+shots = 2048
+
+# Geodrift-Feld Parameter
+drift_amplitude = 0.3
+drift_frequency = 1.0  # arbitrary units
+
+def f_drift(distance, step_time):
+    """Nichtlokale Geodrift-Kopplung"""
+    return drift_amplitude * np.sin(drift_frequency * step_time) / (distance + 1e-3)
+
+# ----------------------------
+# 2. Hamiltonian mit Geodrift
+# ----------------------------
+hamiltonian_op = PauliSumOp.from_list([])
+
+# Kinetische Energie
+for i in range(num_particles):
+    q_index = i * num_qubits_per_particle
+    label = ["I"]*total_qubits
+    label[q_index] = "Z"
+    hamiltonian_op += PauliSumOp.from_list([("".join(label), kinetic_strength)])
+
+# Wechselwirkungen + Geodrift (initial für VQE)
+pairs = [(i,j) for i in range(num_particles) for j in range(i+1,num_particles)]
+for (i,j) in pairs:
+    q_i = i * num_qubits_per_particle
+    q_j = j * num_qubits_per_particle
+    distance = abs(i-j)
+    drift_coeff = f_drift(distance, 0.0)  # initial
+    label = ["I"]*total_qubits
+    label[q_i] = "Z"
+    label[q_j] = "Z"
+    hamiltonian_op += PauliSumOp.from_list([("".join(label), interaction_strength + drift_coeff)])
+
+# Externe Felder
+for q in range(total_qubits):
+    label = ["I"]*total_qubits
+    label[q] = "Z"
+    hamiltonian_op += PauliSumOp.from_list([("".join(label), external_field_strength)])
+
+# ----------------------------
+# 3. VQE für Grundzustand
+# ----------------------------
+ansatz = RealAmplitudes(num_qubits=total_qubits, reps=2, entanglement='full')
+backend_sv = Aer.get_backend('statevector_simulator')
+quantum_instance = QuantumInstance(backend_sv)
+
+energies = []
+def store_energy(eval_count, params, energy, stddev):
+    energies.append(energy)
+
+optimizer = SPSA(maxiter=50)
+vqe_solver = VQE(ansatz=ansatz,
+                 optimizer=optimizer,
+                 quantum_instance=quantum_instance,
+                 callback=store_energy)
+
+vqe_result = vqe_solver.compute_minimum_eigenvalue(operator=hamiltonian_op)
+print("Approximierter Grundzustand inkl. Geodrift-Feld (Energie):", vqe_result.eigenvalue.real)
+
+plt.figure(figsize=(8,4))
+plt.plot(energies, marker='o')
+plt.xlabel("Iteration")
+plt.ylabel("Energy")
+plt.title("VQE Energy Convergence (mit Geodrift)")
+plt.grid(True)
+plt.show()
+
+# ----------------------------
+# 4. Trotter-Zeitentwicklung
+# ----------------------------
+qc = QuantumCircuit(total_qubits)
+for q in range(total_qubits):
+    qc.h(q)  # Initial Superposition
+
+# Backend für Messungen
+backend_qasm = Aer.get_backend('qasm_simulator')
+def measure_probabilities(qc):
+    qc_measure = qc.copy()
+    qc_measure.measure_all()
+    result = execute(qc_measure, backend=backend_qasm, shots=shots).result()
+    counts = result.get_counts()
+    probs = {k: v/shots for k,v in counts.items()}
+    return probs
+
+# Schrittweise Trotter-Dynamik und Messungen
+prob_history = []
+for step in range(trotter_steps):
+    t = step * time_step
+    # Wechselwirkungen + zeitabhängige Geodrift
+    for (i,j) in pairs:
+        q_i = i * num_qubits_per_particle
+        q_j = j * num_qubits_per_particle
+        distance = abs(i-j)
+        drift_coeff = f_drift(distance, t)
+        qc.rzz(2 * (interaction_strength + drift_coeff) * time_step, q_i, q_j)
+    # Kinetische Energie
+    for i in range(num_particles):
+        q_index = i * num_qubits_per_particle
+        qc.rz(2 * kinetic_strength * time_step, q_index)
+    # Externe Felder
+    for q in range(total_qubits):
+        qc.rz(2 * external_field_strength * time_step, q)
+
+    probs = measure_probabilities(qc)
+    prob_history.append(probs)
+
+# ----------------------------
+# 5. 3D-Animation der Wahrscheinlichkeiten
+# ----------------------------
+hilbert_size = 2**total_qubits
+prob_matrix = np.zeros((trotter_steps, hilbert_size))
+state_to_index = {format(i, f'0{total_qubits}b'): i for i in range(hilbert_size)}
+for step, probs in enumerate(prob_history):
+    for state, p in probs.items():
+        idx = state_to_index[state]
+        prob_matrix[step, idx] = p
+
+fig = plt.figure(figsize=(12,6))
+ax = fig.add_subplot(111, projection='3d')
+X, Y = np.meshgrid(range(hilbert_size), range(trotter_steps))
+Z = prob_matrix
+surf = ax.plot_surface(X, Y, Z, cmap='viridis')
+ax.set_xlabel("Qubit-Zustände (binär als Index)")
+ax.set_ylabel("Trotter-Schritt")
+ax.set_zlabel("Wahrscheinlichkeit")
+ax.set_title("3D-Dynamik der Teilchen unter Geodrift-Feld")
+plt.show()
+
+# Optional: Animation der Oberfläche
+from matplotlib import cm
+
+fig_anim = plt.figure(figsize=(12,6))
+ax_anim = fig_anim.add_subplot(111, projection='3d')
+ax_anim.set_xlim(0, hilbert_size-1)
+ax_anim.set_ylim(0, trotter_steps-1)
+ax_anim.set_zlim(0, 1)
+ax_anim.set_xlabel("Qubit-Zustände")
+ax_anim.set_ylabel("Trotter-Schritt")
+ax_anim.set_zlabel("Wahrscheinlichkeit")
+ax_anim.set_title("Geodrift-Feld Dynamik (Animation)")
+
+def update_surface(step):
+    ax_anim.cla()
+    ax_anim.set_xlim(0, hilbert_size-1)
+    ax_anim.set_ylim(0, trotter_steps-1)
+    ax_anim.set_zlim(0, 1)
+    ax_anim.set_xlabel("Qubit-Zustände")
+    ax_anim.set_ylabel("Trotter-Schritt")
+    ax_anim.set_zlabel("Wahrscheinlichkeit")
+    ax_anim.set_title(f"Geodrift-Feld Dynamik: Schritt {step}")
+    surf = ax_anim.plot_surface(X, Y, prob_matrix, cmap=cm.viridis, alpha=0.8)
+    return surf,
+
+anim = FuncAnimation(fig_anim, update_surface, frames=trotter_steps, interval=1000, repeat=True)
+plt.show()
+
+# Optional: exportieren als MP4
+# anim.save("geodrift_dynamics_3d.mp4", writer="ffmpeg", fps=1)
