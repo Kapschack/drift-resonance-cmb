@@ -1,0 +1,85 @@
+# ---------------------------------------------
+# H2 Molekül mit Jordan-Wigner & Geodrift-Feld
+# ---------------------------------------------
+import numpy as np
+from qiskit_nature.drivers import PySCFDriver
+from qiskit_nature.problems.second_quantization.electronic import ElectronicStructureProblem
+from qiskit_nature.converters.second_quantization import QubitConverter
+from qiskit_nature.mappers.second_quantization import JordanWignerMapper
+from qiskit.algorithms import VQE
+from qiskit.circuit.library import TwoLocal
+from qiskit.algorithms.optimizers import SPSA
+from qiskit import Aer, execute
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+
+# -------------------------------
+# 1. Molekül definieren (H2)
+# -------------------------------
+driver = PySCFDriver(atom='H 0 0 0; H 0 0 0.74', basis='sto3g')
+es_problem = ElectronicStructureProblem(driver)
+second_q_op = es_problem.second_q_ops()[0]
+
+# Jordan-Wigner-Transformation
+mapper = JordanWignerMapper()
+converter = QubitConverter(mapper=mapper)
+qubit_op = converter.convert(second_q_op)
+
+num_qubits = qubit_op.num_qubits
+print(f"Anzahl Qubits für H2: {num_qubits}")
+
+# -------------------------------
+# 2. VQE für Grundzustand
+# -------------------------------
+ansatz = TwoLocal(num_qubits, rotation_blocks='ry', entanglement_blocks='cz', reps=2)
+optimizer = SPSA(maxiter=50)
+backend = Aer.get_backend('aer_simulator_statevector')
+vqe = VQE(ansatz=ansatz, optimizer=optimizer, quantum_instance=backend)
+
+result = vqe.compute_minimum_eigenvalue(operator=qubit_op)
+print(f"Grundzustandsenergie H2: {result.eigenvalue.real:.6f} Hartree")
+
+# -------------------------------
+# 3. Dynamisches Geodrift-Feld
+# -------------------------------
+trotter_steps = 20
+time_step = 0.1
+geodrift_amplitude = 0.01
+geodrift_frequency = 0.5
+
+# Anfangszustand vorbereiten
+qc_initial = ansatz.bind_parameters(result.optimal_point)
+prob_history = []
+
+statevector = execute(qc_initial, backend).result().get_statevector()
+
+for step in range(trotter_steps):
+    qc_step = QuantumCircuit(num_qubits)
+    
+    # Simulierter Geodrift (hier als kleine ZZ-Störung zwischen allen Qubit-Paaren)
+    geodrift_strength = geodrift_amplitude * np.sin(geodrift_frequency * step)
+    for q1 in range(num_qubits):
+        for q2 in range(q1+1, num_qubits):
+            qc_step.rzz(2 * geodrift_strength * time_step, q1, q2)
+    
+    full_circuit = qc_initial.compose(qc_step)
+    statevector = execute(full_circuit, backend).result().get_statevector()
+    prob_history.append(np.abs(statevector)**2)
+    qc_initial = full_circuit
+
+# -------------------------------
+# 4. Animation der Zustände
+# -------------------------------
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+x = np.arange(2**num_qubits)
+
+def update(frame):
+    ax.clear()
+    ax.bar(x, prob_history[frame])
+    ax.set_xlabel("Basiszustände")
+    ax.set_ylabel("Wahrscheinlichkeit")
+    ax.set_title(f"Trotter-Schritt {frame+1}")
+
+ani = FuncAnimation(fig, update, frames=trotter_steps, interval=300)
+plt.show()
