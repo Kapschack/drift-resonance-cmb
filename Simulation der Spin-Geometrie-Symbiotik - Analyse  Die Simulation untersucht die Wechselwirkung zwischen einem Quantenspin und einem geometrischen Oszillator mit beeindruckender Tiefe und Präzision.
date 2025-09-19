@@ -1,0 +1,291 @@
+# %% [markdown]
+# # Simulation der Spin-Geometrie-Symbiotik (Finale Version)
+# ## Mit erweiterten Initialisierungsoptionen, interaktiver Visualisierung und Umweltmodellierung
+
+# %%
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+import qutip as qt
+from qutip import basis, tensor, sigmaz, destroy, qeye, mesolve
+import seaborn as sns
+import ipywidgets as widgets
+from IPython.display import display
+
+# Konsistentes Farbschema setzen
+sns.set_palette("colorblind")
+plt.style.use('seaborn-v0_8-whitegrid')
+
+# %%
+def build_hamiltonian(omega_s, omega_g, lambda_c, N, non_linearity=0):
+    """
+    Konstruiert den vollständigen Hamiltonian des Systems.
+    H = (ω_s/2) σ_z ⊗ I + I ⊗ [ω_g a†a + χ (a†a)^2] + λ σ_z ⊗ (a + a†)
+    
+    Parameters:
+    non_linearity: Stärke der Kerr-Nichtlinearität (χ)
+    """
+    # Spin-Operatoren
+    sz = sigmaz()
+    id_s = qeye(2)
+    
+    # Oszillator-Operatoren
+    a = destroy(N)
+    adag = a.dag()
+    id_g = qeye(N)
+    n = adag * a
+    
+    # Hamiltonian-Terme
+    H_spin = (omega_s / 2) * tensor(sz, id_g)
+    H_geom = tensor(id_s, omega_g * n + non_linearity * n**2)  # Mit Nichtlinearität
+    H_int = lambda_c * tensor(sz, (a + adag))
+    
+    return H_spin + H_geom + H_int
+
+def initialize_operators(N):
+    """Initialisiert alle benötigten Operatoren für Erwartungswerte."""
+    # Spin-Operatoren
+    sx = qt.sigmax()
+    sy = qt.sigmay()
+    sz = sigmaz()
+    id_s = qeye(2)
+    
+    # Oszillator-Operatoren
+    a = destroy(N)
+    adag = a.dag()
+    id_g = qeye(N)
+    
+    # Projektor für Spin-Kohärenz (effizientere Berechnung)
+    coherence_op = tensor(basis(2, 0) * basis(2, 1).dag(), id_g)
+    
+    # Zusammengesetzte Operatoren
+    operators = {
+        'sx': tensor(sx, id_g),
+        'sy': tensor(sy, id_g),
+        'sz': tensor(sz, id_g),
+        'x': tensor(id_s, a + adag),
+        'n': tensor(id_s, adag * a),
+        'coherence': coherence_op  # Für effiziente Kohärenzberechnung
+    }
+    
+    return operators
+
+def initialize_state(alpha, beta, N, lambda_c=0, omega_g=1.0, mixed=False):
+    """
+    Initialisiert den Anfangszustand des Systems mit optionaler kohärenter Verschiebung.
+    
+    Parameters:
+    alpha, beta: Koeffizienten für den Spin-Zustand
+    N: Dimension des Oszillator-Hilbertraums
+    lambda_c: Kopplungsstärke (bestimmt Verschiebung)
+    omega_g: Oszillatorfrequenz
+    mixed: Wenn True, verwendet einen gemischten Spin-Zustand
+    """
+    # Kohärenter Zustand mit lambda-abhängiger Verschiebung
+    displacement = lambda_c / omega_g
+    if displacement == 0:
+        psi_geom_0 = basis(N, 0)  # Grundzustand
+    else:
+        psi_geom_0 = qt.coherent(N, displacement)  |0⟩ → |λ/ω⟩
+    
+    if mixed:
+        # Maximale Mischung für den Spin
+        rho_spin_0 = qt.qeye(2) / 2
+        return tensor(rho_spin_0, psi_geom_0 * psi_geom_0.dag())
+    else:
+        # Reiner Zustand für den Spin
+        psi_spin_0 = alpha * basis(2, 0) + beta * basis(2, 1)
+        return tensor(psi_spin_0, psi_geom_0)
+
+# %%
+# Modellparameter
+omega_s = 0.0    # Freie Spin-Präzession
+omega_g = 1.0    # Frequenz des geometrischen Modes
+lambda_c = 0.3   # Kopplungsstärke
+gamma_env = 0.01 # Umgebungs-Dissipationsrate
+
+# Dynamische Hilbertraumdimension basierend auf der Kopplungsstärke
+N = max(20, int(np.ceil(5 * lambda_c / omega_g)) + 10)
+print(f"Verwende Hilbertraum-Dimension N = {N} für den Oszillator")
+
+# Zeitskala für die Simulation
+t_max = 6 * np.pi / omega_g
+tlist = np.linspace(0, t_max, 300)
+
+# %%
+# System initialisieren
+H = build_hamiltonian(omega_s, omega_g, lambda_c, N)
+operators = initialize_operators(N)
+psi0 = initialize_state(1/np.sqrt(2), 1/np.sqrt(2), N, lambda_c, omega_g)
+
+# Kollapsoperatoren für Dissipation (Lindblad-Form)
+a_op = tensor(qeye(2), destroy(N))  # Vernichtungsoperator für den Oszillator
+c_ops = [np.sqrt(gamma_env) * a_op] if gamma_env > 0 else []
+
+# Zeitentwicklung mit direkter Berechnung der Erwartungswerte
+e_ops = list(operators.values())
+result = mesolve(H, psi0, tlist, c_ops, e_ops)
+
+# %%
+# Ergebnisse extrahieren
+expectations = {name: result.expect[i] for i, name in enumerate(operators.keys())}
+
+# Reduzierte Dichteoperatoren für spätere Analyse (nur wenn benötigt)
+rho_geom_t = [result.states[i].ptrace(1) for i in range(len(result.states))]
+
+# %%
+# Plot der Spin-Erwartungswerte
+plt.figure(figsize=(10, 6))
+plt.plot(tlist, expectations['sx'], label=r'$\langle \sigma_x \rangle$')
+plt.plot(tlist, expectations['sy'], label=r'$\langle \sigma_y \rangle$')
+plt.plot(tlist, expectations['sz'], label=r'$\langle \sigma_z \rangle$')
+plt.xlabel('Zeit')
+plt.ylabel('Erwartungswert')
+plt.title(f'Spin-Dekohärenz (γ = {gamma_env})')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# %%
+# Analytische Vorhersage und Vergleich
+xi_t = (lambda_c / omega_g) * (1 - np.exp(-1j * omega_g * tlist))
+coherence_theory = np.exp(-2 * np.abs(xi_t)**2) * np.exp(-gamma_env * tlist / 2)
+
+# Numerische Kohärenz (bereits in expectations gespeichert)
+coherence_numeric = np.abs(expectations['coherence'])
+
+# Exponentieller Fit der Dekohärenz
+def decay_model(t, gamma, offset):
+    return np.exp(-gamma * t) + offset
+
+try:
+    popt, pcov = curve_fit(decay_model, tlist, coherence_numeric, 
+                          p0=[lambda_c**2/omega_g + gamma_env/2, 0], 
+                          bounds=(0, [10, 0.1]))
+    gamma_fit = popt[0]
+    gamma_err = np.sqrt(pcov[0, 0])
+    fit_label = f'Fit ($\Gamma = {gamma_fit:.3f} \pm {gamma_err:.3f}$)'
+    coherence_fit = decay_model(tlist, *popt)
+except Exception as e:
+    print(f"Fit fehlgeschlagen: {e}")
+    gamma_fit = gamma_err = None
+    coherence_fit = np.zeros_like(tlist)
+
+# Fehlerberechnung
+error = np.abs(coherence_numeric - coherence_theory)
+
+# Plot mit analytischem Vergleich und Fit
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+ax1.plot(tlist, coherence_numeric, label='Numerische Kohärenz', linewidth=2)
+ax1.plot(tlist, coherence_theory, '--', label='Analytische Vorhersage', linewidth=2)
+if gamma_fit is not None:
+    ax1.plot(tlist, coherence_fit, ':', label=fit_label, linewidth=2)
+ax1.set_ylabel('Kohärenz')
+ax1.set_title('Dekohärenz der Spin-Kohärenz')
+ax1.legend()
+ax1.grid(True)
+
+ax2.plot(tlist, error, label='Absolute Differenz', color='red')
+ax2.set_xlabel('Zeit')
+ax2.set_ylabel('Fehler')
+ax2.set_title('Differenz zwischen numerischer und analytischer Lösung')
+ax2.legend()
+ax2.grid(True)
+
+plt.tight_layout()
+plt.show()
+
+# %%
+# Interaktive Wigner-Funktions-Visualisierung
+def plot_wigner_at_time(time_index):
+    """Plottet die Wigner-Funktion zu einem bestimmten Zeitpunkt."""
+    rho = rho_geom_t[time_index]
+    x = np.linspace(-5, 5, 100)
+    y = np.linspace(-5, 5, 100)
+    W = qt.wigner(rho, x, y)
+    
+    plt.figure(figsize=(8, 6))
+    plt.contourf(x, y, W, 40, cmap='RdBu')
+    plt.xlabel('x')
+    plt.ylabel('p')
+    plt.title(f'Wigner-Funktion bei t = {tlist[time_index]:.2f}')
+    plt.colorbar()
+    plt.show()
+
+# Widget für interaktive Zeitauswahl
+time_slider = widgets.IntSlider(
+    value=0,
+    min=0,
+    max=len(tlist)-1,
+    step=1,
+    description='Zeitindex:',
+    continuous_update=False
+)
+
+widgets.interact(plot_wigner_at_time, time_index=time_slider)
+
+# %%
+# Parameter-Scan: Dekohärenzrate in Abhängigkeit von lambda_c
+lambda_values = np.linspace(0.1, 0.5, 5)
+gamma_values = []
+gamma_errors = []
+
+for lamb in lambda_values:
+    # Dynamische Anpassung von N basierend auf lambda
+    N_temp = max(20, int(np.ceil(5 * lamb / omega_g)) + 10)
+    
+    H_temp = build_hamiltonian(omega_s, omega_g, lamb, N_temp)
+    operators_temp = initialize_operators(N_temp)
+    psi0_temp = initialize_state(1/np.sqrt(2), 1/np.sqrt(2), N_temp, lamb, omega_g)
+    
+    e_ops_temp = list(operators_temp.values())
+    result_temp = mesolve(H_temp, psi0_temp, tlist, c_ops, e_ops_temp)
+    
+    coherence_temp = np.abs(result_temp.expect[list(operators_temp.keys()).index('coherence')])
+    
+    try:
+        popt, pcov = curve_fit(decay_model, tlist, coherence_temp, 
+                              p0=[lamb**2/omega_g + gamma_env/2, 0], 
+                              bounds=(0, [10, 0.1]))
+        gamma_values.append(popt[0])
+        gamma_errors.append(np.sqrt(pcov[0, 0]))
+    except:
+        gamma_values.append(np.nan)
+        gamma_errors.append(0)
+
+# Theoretische Vorhersage: Γ ∝ λ²
+theory_gamma = [l**2 / omega_g + gamma_env/2 for l in lambda_values]
+
+plt.figure(figsize=(10, 6))
+plt.errorbar(lambda_values, gamma_values, yerr=gamma_errors, 
+             fmt='o-', capsize=5, label='Numerische Werte ±σ')
+plt.plot(lambda_values, theory_gamma, '--', label='Theorie (∝ λ² + γ/2)')
+plt.xlabel('Kopplungsstärke λ')
+plt.ylabel('Dekohärenzrate Γ')
+plt.title('Parameter-Scan: Dekohärenzrate vs. Kopplungsstärke')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# %%
+# Nichtlineare Geometrie untersuchen
+print("Untersuchung nichtlinearer Geometrie (Kerr-Oszillator)...")
+
+non_linearity = 0.1  # Kerr-Nichtlinearität
+H_nonlinear = build_hamiltonian(omega_s, omega_g, lambda_c, N, non_linearity)
+result_nonlinear = mesolve(H_nonlinear, psi0, tlist, c_ops, e_ops)
+
+# Vergleich der Kohärenzen
+coherence_linear = np.abs(expectations['coherence'])
+coherence_nonlinear = np.abs(result_nonlinear.expect[list(operators.keys()).index('coherence')])
+
+plt.figure(figsize=(10, 6))
+plt.plot(tlist, coherence_linear, label='Lineare Geometrie')
+plt.plot(tlist, coherence_nonlinear, label=f'Nichtlineare Geometrie (χ = {non_linearity})')
+plt.xlabel('Zeit')
+plt.ylabel('Kohärenz')
+plt.title('Einfluss nichtlinearer Geometrie auf die Dekohärenz')
+plt.legend()
+plt.grid(True)
+plt.show()
