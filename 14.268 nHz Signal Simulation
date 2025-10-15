@@ -1,0 +1,483 @@
+# %% [markdown]
+# # 🌟 ECHTES GEODRIFT-SIGNAL SIMULATION
+# **Nachweis der charakteristischen 14.3 nHz Resonanz mit realistischen Detektionsbedingungen**
+
+# %%
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import signal as scipy_signal
+from scipy.stats import kurtosis, skew, norm
+import pandas as pd
+import warnings
+warnings.filterwarnings('ignore')
+
+# %%
+# REALISTISCHE GEODRIFT-PARAMETER BASIEREND AUF THEORETISCHEN VORHERSAGEN
+class RealGeodriftConfig:
+    def __init__(self):
+        # PRIMÄRE SIGNALPARAMETER
+        self.f0 = 14.3  # nHz - Zentrale Geodrift-Resonanzfrequenz
+        self.sigma_f = 1.43  # nHz - Natürliche Linienbreite (10%)
+        
+        # SIGNAL-RAUSCH-PARAMETER
+        self.signal_amplitude = 2.5e-16  # Realistische Amplitude für PTA-Detektion
+        self.background_noise = 8.0e-16  # Dominantes Hintergrundrauschen
+        self.red_noise_amplitude = 3.0e-16  # Rotes Rauschen (1/f)
+        
+        # KORRELATIONSPARAMETER
+        self.correlation_time = 45.2  # Tage - Charakteristische Korrelationszeit
+        self.gw_coupling = 0.28  # Kopplung an GW-Hintergrund
+        
+        # BEOBACHTUNGSPARAMETER
+        self.observation_years = 12  # Jahre - Typische PTA-Beobachtungsdauer
+        self.sampling_rate = 1.0  # Messungen/Tag
+        
+config = RealGeodriftConfig()
+
+print("🌌 REALES GEODRIFT-SIGNAL SIMULATION")
+print("="*50)
+print(f"🎯 ZENTRALE RESONANZ: {config.f0} nHz")
+print(f"📊 SIGNALAMPLITUDE: {config.signal_amplitude:.1e}")
+print(f"🌫️  HINTERGRUNDRAUSCHEN: {config.background_noise:.1e}")
+print(f"📈 BEOBACHTUNGSDAUER: {config.observation_years} Jahre")
+print(f"🔄 KORRELATIONSZEIT: {config.correlation_time} Tage")
+
+# %%
+def generate_real_geodrift_signal(config, random_state=42):
+    """
+    Generiert ein REALISTISCHES Geodrift-Signal mit charakteristischen Eigenschaften
+    """
+    np.random.seed(random_state)
+    
+    # ZEITACHSE
+    total_days = config.observation_years * 365
+    n_points = int(total_days * config.sampling_rate)
+    times = np.linspace(0, total_days, n_points)
+    dt_days = times[1] - times[0]
+    dt_seconds = dt_days * 86400
+    
+    # FREQUENZACHSE
+    freqs = np.fft.fftfreq(n_points, d=dt_seconds) * 1e9  # nHz
+    
+    # 1. GRUNDLEGENDE GEODRIFT-RESONANZ
+    resonance_profile = config.signal_amplitude * np.exp(
+        -0.5 * ((np.abs(freqs) - config.f0) / config.sigma_f)**2
+    )
+    
+    # 2. STOCHASTISCHE FLUKTUATIONEN (GW-HINTERGRUND)
+    t_days = times - times[0]
+    correlation_kernel = np.exp(-0.5 * (t_days / config.correlation_time)**2)
+    
+    gw_fluctuations = np.convolve(
+        np.random.normal(0, 1, n_points), 
+        correlation_kernel, 
+        mode='same'
+    )
+    gw_fluctuations /= np.std(gw_fluctuations)
+    
+    # 3. MODULIERTES SIGNAL IM FREQUENZBEREICH
+    phase = np.random.uniform(0, 2*np.pi, n_points)
+    signal_fd = np.sqrt(resonance_profile) * np.exp(1j * phase)
+    signal_fd *= (1 + config.gw_coupling * gw_fluctuations * 0.15)
+    
+    # 4. ZEITBEREICHSSIGNAL
+    signal_td = np.fft.ifft(signal_fd).real
+    
+    # 5. REALISTISCHES HINTERGRUNDRAUSCHEN
+    # Weißes Rauschen
+    white_noise = np.random.normal(0, config.background_noise, n_points)
+    
+    # Rotes Rauschen (1/f-Spektrum)
+    red_freqs = np.fft.fftfreq(n_points, d=dt_seconds)
+    red_spectrum = config.red_noise_amplitude / (1 + np.abs(red_freqs) * 1e7)
+    red_phase = np.random.uniform(0, 2*np.pi, n_points)
+    red_fd = np.sqrt(red_spectrum) * np.exp(1j * red_phase)
+    red_noise = np.fft.ifft(red_fd).real
+    
+    # 6. KOMPLETTES SIGNAL
+    complete_signal = signal_td + white_noise + red_noise
+    
+    return times, freqs, complete_signal, gw_fluctuations, signal_td
+
+# %%
+# GENERIERE REALISTISCHES SIGNAL
+print("\n📡 GENERIERE REALISTISCHES GEODRIFT-SIGNAL...")
+times, freqs, signal_data, gw_fluc, clean_signal = generate_real_geodrift_signal(config)
+
+print(f"✅ SIGNAL ERFOLGREICH GENERIERT")
+print(f"   • Datenpunkte: {len(signal_data):,}")
+print(f"   • Beobachtungszeit: {times[-1]/365:.1f} Jahre")
+print(f"   • Abtastrate: {1/(times[1]-times[0]):.1f} Messungen/Tag")
+
+# SIGNALCHARAKTERISIERUNG
+signal_power = np.var(clean_signal)
+total_power = np.var(signal_data)
+noise_power = total_power - signal_power
+snr_estimate = signal_power / noise_power if noise_power > 0 else 0
+
+print(f"   • Signal-zu-Rauschen (SNR): {snr_estimate:.3f}")
+print(f"   • Signalstärke: {np.std(clean_signal):.2e}")
+print(f"   • Rauschstärke: {np.std(signal_data - clean_signal):.2e}")
+
+# %%
+def advanced_geodrift_detection(signal_data, times, expected_f0=14.3):
+    """
+    FORTGESCHRITTENE GEODRIFT-DETEKTION MIT MULTIPLEN METHODEN
+    """
+    dt_days = times[1] - times[0]
+    dt_seconds = dt_days * 86400
+    freqs = np.fft.fftfreq(len(signal_data), d=dt_seconds) * 1e9
+    
+    # LEISTUNGSSPEKTRUM
+    psd = np.abs(np.fft.fft(signal_data))**2
+    
+    # BESCHRÄNKUNG AUF RELEVANTEN BEREICH
+    freq_mask = (freqs > 5) & (freqs < 25)
+    freqs_analysis = freqs[freq_mask]
+    psd_analysis = psd[freq_mask]
+    
+    if len(freqs_analysis) == 0:
+        return {"detected": False}, freqs_analysis, psd_analysis
+    
+    # 1. TRADITIONELLE PEAK-DETEKTION
+    noise_floor = np.median(psd_analysis)
+    min_peak_height = noise_floor * 4
+    min_distance = max(1, len(psd_analysis) // 150)
+    
+    peaks, properties = scipy_signal.find_peaks(
+        psd_analysis, 
+        height=min_peak_height,
+        distance=min_distance,
+        prominence=noise_floor * 1.5
+    )
+    
+    # 2. FIND BEST MATCHING PEAK
+    best_peak_idx = None
+    min_freq_error = float('inf')
+    
+    for peak_idx in peaks:
+        peak_freq = freqs_analysis[peak_idx]
+        freq_error = abs(peak_freq - expected_f0)
+        
+        if freq_error < min_freq_error and freq_error < 3.0:  # Max 3 nHz Abweichung
+            min_freq_error = freq_error
+            best_peak_idx = peak_idx
+    
+    # 3. SIGNALCHARAKTERISIERUNG
+    if best_peak_idx is not None:
+        peak_freq = freqs_analysis[best_peak_idx]
+        peak_power = psd_analysis[best_peak_idx]
+        
+        # BREITENMESSUNG
+        half_max = peak_power * 0.5
+        peak_region = (psd_analysis > half_max) & (np.abs(freqs_analysis - peak_freq) < 5)
+        peak_freqs = freqs_analysis[peak_region]
+        
+        if len(peak_freqs) > 1:
+            fwhm = np.max(peak_freqs) - np.min(peak_freqs)
+            sigma_measured = fwhm / 2.355
+        else:
+            sigma_measured = 0
+        
+        # SIGNIFIKANZBERECHNUNG
+        local_background = np.median(psd_analysis[
+            (freqs_analysis > peak_freq - 10) & 
+            (freqs_analysis < peak_freq + 10) & 
+            (np.abs(freqs_analysis - peak_freq) > 2)
+        ])
+        
+        snr = peak_power / local_background if local_background > 0 else 0
+        
+        # SIGNIFIKANZ (GAUSS'SCHE NÄHERUNG)
+        significance = np.sqrt(2 * snr) if snr > 0 else 0
+        
+        results = {
+            "detected": True,
+            "frequency": peak_freq,
+            "frequency_error": abs(peak_freq - expected_f0),
+            "snr": snr,
+            "significance": significance,
+            "sigma_f": sigma_measured,
+            "sigma_f_ratio": sigma_measured / peak_freq if peak_freq > 0 else 0,
+            "peak_power": peak_power,
+            "noise_floor": noise_floor
+        }
+    else:
+        results = {
+            "detected": False,
+            "frequency": 0,
+            "frequency_error": expected_f0,
+            "snr": 0,
+            "significance": 0,
+            "sigma_f": 0,
+            "sigma_f_ratio": 0,
+            "peak_power": 0,
+            "noise_floor": noise_floor
+        }
+    
+    return results, freqs_analysis, psd_analysis
+
+# %%
+# DURCHFÜHRE FORTGESCHRITTENE DETEKTION
+print("\n🔍 FORTGESCHRITTENE GEODRIFT-SIGNALANALYSE...")
+detection_results, analysis_freqs, analysis_psd = advanced_geodrift_detection(signal_data, times)
+
+# %%
+# DETEKTIONSERGEBNISSE
+print("\n" + "="*60)
+print("🎯 GEODRIFT-SIGNAL DETEKTIONSERGEBNIS")
+print("="*60)
+
+if detection_results['detected']:
+    print(f"🌠 ✅ SIGNAL ERFOLGREICH DETEKTIERT!")
+    print(f"   📍 Frequenz: {detection_results['frequency']:.3f} nHz")
+    print(f"   🎯 Abweichung: {detection_results['frequency_error']:.3f} nHz")
+    print(f"   📊 Signal-zu-Rauschen: {detection_results['snr']:.2f}")
+    print(f"   🌡️  Signifikanz: {detection_results['significance']:.2f}σ")
+    print(f"   📏 Relative Breite: {detection_results['sigma_f_ratio']:.3f}")
+    
+    # THEORIEVERGLEICH
+    print(f"\n📊 THEORIE-VERGLEICH:")
+    expected_width_ratio = 1.43 / 14.3  # sigma_f / f0
+    width_consistency = abs(detection_results['sigma_f_ratio'] - expected_width_ratio) < 0.05
+    
+    if width_consistency:
+        print(f"   ✅ Linienbreite konsistent mit Geodrift-Vorhersage")
+    else:
+        print(f"   ⚠️  Linienbreite weicht von Vorhersage ab")
+        
+    freq_consistency = detection_results['frequency_error'] < 1.0
+    if freq_consistency:
+        print(f"   ✅ Frequenz konsistent mit 14.3 nHz Vorhersage")
+    else:
+        print(f"   ⚠️  Frequenz weicht von 14.3 nHz Vorhersage ab")
+        
+else:
+    print(f"❌ KEIN SIGNAL DETEKTIERT")
+    print(f"   • Erwartete Frequenz: {config.f0} nHz")
+    print(f"   • Durchsuchter Bereich: 5-25 nHz")
+    print(f"   • Rauschuntergrund: {detection_results['noise_floor']:.2e}")
+
+# %%
+# MONTE-CARLO VALIDIERUNG
+print("\n🎲 MONTE-CARLO VALIDIERUNG (50 Simulationen)...")
+
+n_simulations = 50
+detections = 0
+frequencies = []
+significances = []
+false_detections = 0
+
+for i in range(n_simulations):
+    # GENERIERE NEUE SIGNALREALISATION
+    _, _, new_signal, _, _ = generate_real_geodrift_signal(config, random_state=i*100)
+    
+    # ANALYSIERE SIGNAL
+    results, _, _ = advanced_geodrift_detection(new_signal, times)
+    
+    if results['detected']:
+        detections += 1
+        frequencies.append(results['frequency'])
+        significances.append(results['significance'])
+    
+    # FALSE-ALARM-RATE BERECHNUNG (NUR RAUSCHEN)
+    noise_only = np.random.normal(0, config.background_noise, len(signal_data))
+    red_noise = np.cumsum(np.random.normal(0, config.red_noise_amplitude/100, len(signal_data)))
+    background = noise_only + red_noise
+    
+    noise_results, _, _ = advanced_geodrift_detection(background, times)
+    if noise_results['detected']:
+        false_detections += 1
+
+detection_rate = detections / n_simulations
+false_alarm_rate = false_detections / n_simulations
+
+print(f"📊 MONTE-CARLO-ERGEBNISSE:")
+print(f"   • Simulationen: {n_simulations}")
+print(f"   • Detektionsrate: {detection_rate:.1%} ({detections}/{n_simulations})")
+print(f"   • Falschalarm-Rate: {false_alarm_rate:.1%}")
+
+if len(frequencies) > 0:
+    print(f"   • Mittlere Frequenz: {np.mean(frequencies):.3f} ± {np.std(frequencies):.3f} nHz")
+    print(f"   • Mittlere Signifikanz: {np.mean(significances):.2f}σ")
+
+# %%
+# VISUALISIERUNG DES ECHTEN SIGNALS
+plt.figure(figsize=(16, 12))
+
+# 1. ZEITBEREICH (AUSSCHNITT)
+plt.subplot(3, 3, 1)
+sample_points = min(2000, len(times))
+plt.plot(times[:sample_points], signal_data[:sample_points], 'b-', alpha=0.7, linewidth=0.8)
+plt.plot(times[:sample_points], clean_signal[:sample_points], 'r-', alpha=0.9, linewidth=1.2)
+plt.xlabel('Zeit [Tage]')
+plt.ylabel('Amplitude')
+plt.title('Geodrift-Signal im Zeitbereich\n(Rot: Signal, Blau: Signal+Rauschen)')
+plt.legend(['Signal + Rauschen', 'Reines Signal'])
+plt.grid(True, alpha=0.3)
+
+# 2. LEISTUNGSSPEKTRUM
+plt.subplot(3, 3, 2)
+positive_freqs = analysis_freqs
+positive_psd = analysis_psd
+
+plt.semilogy(positive_freqs, positive_psd, 'b-', linewidth=1.5, alpha=0.8, label='Gemessen')
+if detection_results['detected']:
+    plt.axvline(detection_results['frequency'], color='red', linestyle='--', 
+                linewidth=2, label=f'Detektiert: {detection_results["frequency"]:.2f} nHz')
+plt.axvline(config.f0, color='green', linestyle='--', linewidth=2, label='Erwartet: 14.3 nHz')
+plt.xlabel('Frequenz [nHz]')
+plt.ylabel('Leistungsspektrum')
+plt.title('Leistungsspektrum mit Geodrift-Resonanz')
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+# 3. ZOOM AUF RESONANZ
+plt.subplot(3, 3, 3)
+resonance_mask = (positive_freqs > 10) & (positive_freqs < 18)
+if np.any(resonance_mask):
+    plt.plot(positive_freqs[resonance_mask], positive_psd[resonance_mask], 'b-', linewidth=2, label='Daten')
+    
+    # THEORETISCHE KURVE
+    f_fit = np.linspace(10, 18, 200)
+    theory_curve = config.signal_amplitude * np.exp(-0.5*((f_fit - config.f0)/config.sigma_f)**2)
+    plt.plot(f_fit, theory_curve, 'r--', linewidth=2, label='Theorie')
+    
+    if detection_results['detected']:
+        plt.axvline(detection_results['frequency'], color='red', linestyle='-', 
+                   alpha=0.5, label='Detektiert')
+    
+    plt.xlabel('Frequenz [nHz]')
+    plt.ylabel('Leistungsspektrum')
+    plt.title('Zoom: Geodrift-Resonanzbereich')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+# 4. SIGNAL-RAUSCH-VERGLEICH
+plt.subplot(3, 3, 4)
+plt.hist(signal_data, bins=100, density=True, alpha=0.7, color='blue', label='Signal + Rauschen')
+plt.hist(clean_signal, bins=100, density=True, alpha=0.7, color='red', label='Reines Signal')
+plt.xlabel('Amplitude')
+plt.ylabel('Wahrscheinlichkeit')
+plt.title('Amplitudenverteilung')
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+# 5. KORRELATIONSANALYSE
+plt.subplot(3, 3, 5)
+correlation = np.correlate(signal_data, signal_data, mode='full')
+correlation = correlation[len(correlation)//2:len(correlation)//2 + 500]
+correlation /= correlation[0]
+plt.plot(np.arange(len(correlation)) * dt_days, correlation, 'purple', linewidth=1.5)
+plt.axhline(1/np.e, color='red', linestyle='--', label=f'1/e ≈ {config.correlation_time} Tage')
+plt.xlabel('Zeitversatz [Tage]')
+plt.ylabel('Autokorrelation')
+plt.title('Autokorrelationsfunktion')
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+# 6. MONTE-CARLO VERTEILUNG
+plt.subplot(3, 3, 6)
+if len(frequencies) > 0:
+    plt.hist(frequencies, bins=15, density=True, alpha=0.7, color='orange')
+    plt.axvline(config.f0, color='red', linestyle='--', linewidth=2, label='Erwartet: 14.3 nHz')
+    plt.axvline(np.mean(frequencies), color='blue', linestyle='--', linewidth=2, 
+               label=f'Mittel: {np.mean(frequencies):.2f} nHz')
+    plt.xlabel('Frequenz [nHz]')
+    plt.ylabel('Wahrscheinlichkeit')
+    plt.title('Monte-Carlo Frequenzverteilung')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+# 7. SIGNIFIKANZVORTEILUNG
+plt.subplot(3, 3, 7)
+if len(significances) > 0:
+    plt.hist(significances, bins=12, density=True, alpha=0.7, color='green')
+    plt.axvline(3.0, color='red', linestyle='--', linewidth=2, label='3σ Schwelle')
+    plt.axvline(5.0, color='darkred', linestyle='--', linewidth=2, label='5σ Schwelle')
+    plt.xlabel('Signifikanz [σ]')
+    plt.ylabel('Wahrscheinlichkeit')
+    plt.title('Signifikanzverteilung über Simulationen')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+# 8. ZEITLICHE MODULATION
+plt.subplot(3, 3, 8)
+sidereal_day = 0.99726958
+sidereal_phase = (times % sidereal_day) / sidereal_day * 24
+plt.scatter(sidereal_phase[:2000], signal_data[:2000], c=times[:2000], 
+           alpha=0.6, cmap='viridis', s=1)
+plt.colorbar(label='Beobachtungstag')
+plt.xlabel('Siderische Zeit [h]')
+plt.ylabel('Signal Amplitude')
+plt.title('Tageszeitliche Modulation')
+plt.grid(True, alpha=0.3)
+
+# 9. ZUSAMMENFASSUNG
+plt.subplot(3, 3, 9)
+plt.axis('off')
+summary_text = [
+    "🌌 GEODRIFT-SIGNAL ZUSAMMENFASSUNG",
+    "",
+    f"✅ Detektiert: {detection_results['detected']}",
+    f"📍 Frequenz: {detection_results.get('frequency', 0):.2f} nHz",
+    f"🎯 Abweichung: {detection_results.get('frequency_error', 0):.2f} nHz", 
+    f"📊 SNR: {detection_results.get('snr', 0):.2f}",
+    f"🌡️  Signifikanz: {detection_results.get('significance', 0):.2f}σ",
+    f"📏 Breite: {detection_results.get('sigma_f_ratio', 0):.3f}",
+    "",
+    f"📈 Detektionsrate: {detection_rate:.1%}",
+    f"🎲 Falschalarm-Rate: {false_alarm_rate:.1%}",
+    "",
+    "🔬 BEWERTUNG:",
+    "Echtes Geodrift-Signal simuliert",
+    f"mit {config.observation_years} Jahren Daten"
+]
+
+plt.text(0.1, 0.95, "\n".join(summary_text), transform=plt.gca().transAxes,
+         fontfamily='monospace', verticalalignment='top', fontsize=10)
+
+plt.tight_layout()
+plt.show()
+
+# %%
+# WISSENSCHAFTLICHE BEWERTUNG
+print("\n" + "="*70)
+print("🔬 WISSENSCHAFTLICHE BEWERTUNG DES GEODRIFT-SIGNALS")
+print("="*70)
+
+print(f"📊 SIGNALCHARAKTERISTIK:")
+print(f"   • Frequenzstabilität: {np.std(frequencies) if len(frequencies) > 0 else 'N/A':.3f} nHz")
+print(f"   • Detektionskonsistenz: {detection_rate:.1%} über {n_simulations} Simulationen")
+print(f"   • False-Alarm-Rate: {false_alarm_rate:.1%} (akzeptabel < 5%)")
+
+print(f"\n🎯 THEORIE-KONSISTENZ:")
+if detection_results['detected']:
+    freq_match = detection_results['frequency_error'] < 1.0
+    width_match = abs(detection_results['sigma_f_ratio'] - 0.1) < 0.05
+    
+    if freq_match:
+        print(f"   ✅ Frequenz konsistent mit Geodrift-Vorhersage")
+    else:
+        print(f"   ⚠️  Frequenz weicht von Vorhersage ab")
+        
+    if width_match:
+        print(f"   ✅ Linienbreite konsistent mit Vorhersage")
+    else:
+        print(f"   ⚠️  Linienbreite weicht von Vorhersage ab")
+
+print(f"\n🚀 EMPFEHLUNGEN:")
+print(f"   1. {'✅' if detection_rate > 0.3 else '❌'} Detektionsrate verbessern")
+print(f"   2. {'✅' if false_alarm_rate < 0.05 else '❌'} False-Alarm-Rate optimieren") 
+print(f"   3. {'✅' if len(frequencies) > 0 and np.std(frequencies) < 0.5 else '❌'} Frequenzstabilität sicherstellen")
+
+print(f"\n💎 GESAMTBEWERTUNG:")
+if (detection_rate > 0.4 and false_alarm_rate < 0.05 and 
+    detection_results.get('significance', 0) > 3.0):
+    print("   🌟 AUSGEZEICHNET - Signal robust detektierbar")
+elif (detection_rate > 0.2 and false_alarm_rate < 0.1):
+    print("   ✅ GUT - Signal nachweisbar mit aktueller Methode")
+else:
+    print("   🔍 WEITERE OPTIMIERUNG EMPFOHLEN")
+
+print(f"\n🎉 SIMULATION EINES ECHTEN GEODRIFT-SIGNALS ABGESCHLOSSEN!")
